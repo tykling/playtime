@@ -45,12 +45,12 @@ def test_symlink_dirs(tmpdir_factory, playtime) -> None:
     jackasslink = symlink_dir / "year/2022 (1 movies)/Jackass Forever (2022)/jackass4"
 
     assert commandolink.is_symlink()
-    assert commandolink.readlink() == str(moviedir / "movies2/commando.1985")
+    assert commandolink.readlink() == moviedir / "movies2/commando.1985"
     assert jackasslink.is_symlink()
-    assert jackasslink.readlink() == str(moviedir / "movies2/jackass4")
+    assert jackasslink.readlink() == moviedir / "movies2/jackass4"
 
     pt.create_symlink_dirs(symlink_dir=symlink_dir, categories=["genres", "year", "directors", "actors"], relative=True)
     assert commandolink.is_symlink()
-    assert commandolink.readlink() == "../../../../movies0/movies2/commando.1985"
+    assert commandolink.readlink() == Path("../../../../movies0/movies2/commando.1985")
     assert jackasslink.is_symlink()
-    assert jackasslink.readlink() == "../../../../movies0/movies2/jackass4"
+    assert jackasslink.readlink() == Path("../../../../movies0/movies2/jackass4")
