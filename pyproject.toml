@@ -1,0 +1,121 @@
+########### BASIC METADATA ###############
+[project]
+authors = [
+  {email = "thomas@gibfest.dk"},
+  {name = "Thomas Steen Rasmussen"}
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+]
+description = "Organise your movie collection using movie metadata and directory symlinks."
+dynamic = ["version"]
+keywords = ["movies", "metadata", "symlinks"]
+license = "BSD-3-Clause"
+name = "playtime"
+readme = "README.md"
+requires-python = ">=3.12"
+
+
+########### DEPENDENCIES ###############
+dependencies = [
+    "cinemagoer >= 2023.5.1",
+    "cinemagoerng >= 0.4",
+    "parse-torrent-name >= 1.1.1",
+    "rich-argparse==1.7.1",
+    "enrich==1.2.7",
+]
+
+[project.optional-dependencies]
+dev = [
+    "build==1.3.0",
+    "prek==0.2.0",
+    "setuptools-scm == 8.1.0",
+]
+test = [
+    "coverage[toml]==7.6.12",
+    "pytest==8.3.4",
+    "pytest-cov==6.0.0",
+    "pytest-mock==3.14.0",
+    "pytest-randomly==3.16.0",
+    "tox==4.24.1",
+]
+
+
+########## SCRIPTS ####################
+[project.scripts]
+playtime = "playtime:main"
+
+
+########## URLS #######################
+[project.urls]
+homepage = "https://github.com/tykling/playtime"
+
+
+########### SETUPTOOLS ################
+[build-system]
+requires = ["setuptools", "setuptools-scm"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools_scm]
+write_to = "_version.py"
+
+[tool.setuptools.packages.find]
+include = ["playtime"]
+
+
+########### RUFF ######################
+[tool.ruff]
+target-version = "py312"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = [
+    "G004", # Logging statement uses f-string
+    "EM101", # Exception must not use a string literal, assign to variable first
+    "COM812", # missing-trailing-comma (https://docs.astral.sh/ruff/formatter/#conflicting-lint-rules)
+    "ISC001", # single-line-implicit-string-concatenation (https://docs.astral.sh/ruff/formatter/#conflicting-lint-rules)
+    "D203", # incorrect-blank-line-before-class (conflict with D211)
+    "D213", # multi-line-summary-second-line (conflict with D212)
+]
+[tool.ruff.lint.per-file-ignores]
+"test_playtime.py" = [
+    "S101", # asserts allowed in tests...
+    "ARG", # Unused function args -> fixtures nevertheless are functionally relevant...
+    "PLR2004", # Magic value used in comparison, ...
+    "ANN001", # Missing type annotation for function argument ...
+    "ANN201", # Missing return type annotation for public function ...
+]
+"conftest.py" = [
+    "T201", # print()
+    "ANN001", # Missing type annotation for function argument ...
+    "ANN201", # Missing return type annotation for public function ...
+    "INP001", # File `conftest.py` is part of an implicit namespace package. Add an `__init__.py`
+    "PT004", # Fixture ... does not return anything, add leading underscore
+]
+
+############ MYPY #####################
+[tool.mypy]
+python_version = "3.12"
+exclude = [
+    "build/",
+    "venv/",
+]
+
+
+########### COVERAGE.PY ###############
+[tool.coverage.run]
+omit = ["_version.py"]
+
+
+########### PYTEST ####################
+[tool.pytest.ini_options]
+log_format = "%(asctime)s pytest %(levelname)s %(name)s.%(funcName)s():%(lineno)i:  %(message)s"
+log_date_format = "%Y-%m-%d %H:%M:%S"
+# consider warnings errors
+filterwarnings = [
+    "error",
+    "ignore:.*pkgutil\\.find_loader.*:DeprecationWarning",
+]
+addopts = "--cov=. --cov-report=xml --cov-report=html --cov-config=./pyproject.toml"

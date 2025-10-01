@@ -1,0 +1,35 @@
+---
+name: "Publish PyPi package when a new tag is pushed"
+
+on:  # yamllint disable-line rule:truthy
+  push:
+    tags:
+      - 'v*'
+
+# https://docs.pypi.org/trusted-publishers/using-a-publisher/
+jobs:
+  pypi-publish:
+    name: "Upload release to PyPI"
+    runs-on: "ubuntu-latest"
+    environment: "pypi-publish"
+    permissions:
+      id-token: "write"
+    steps:
+      # https://github.com/pypa/sampleproject/blob/main/.github/workflows/release.yml
+      - name: "Checkout source"
+        uses: "actions/checkout@v4"
+
+      - name: "Set up Python"
+        uses: "actions/setup-python@v5"
+        with:
+          python-version: "3.13"
+
+      - name: "Install build dependencies"
+        run: "pip install .[dev]"
+
+      - name: "Build the package"
+        run: "python -m build ."
+
+      - name: "Publish package distributions to PyPI"
+        uses: "pypa/gh-action-pypi-publish@release/v1"
+...
