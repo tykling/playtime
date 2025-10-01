@@ -1,0 +1,35 @@
+---
+name: "Run Tox"
+
+on:  # yamllint disable-line rule:truthy
+  push:
+
+jobs:
+  build:
+    runs-on: "ubuntu-latest"
+    strategy:
+      matrix:
+        python-version: ["3.12", "3.13"]
+    steps:
+      - name: "Checkout source"
+        uses: "actions/checkout@v4"
+
+      - name: "Set up Python"
+        uses: "actions/setup-python@v5"
+        with:
+          python-version: "${{ matrix.python-version }}"
+
+      - name: "Install python dependencies"
+        run: "pip install .[test]"
+
+      - name: "Run tox"
+        run: "tox"
+
+      - name: "Upload coverage to Codecov"
+        uses: "codecov/codecov-action@v5"
+        with:
+          token: "${{secrets.CODECOV_TOKEN}}"
+          # disable until codecov improves stability
+          # fail_ci_if_error: true
+          files: "./coverage.xml"
+...
