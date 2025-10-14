@@ -442,6 +442,8 @@ class Playtime:
         for basedir in basedirs:
             # loop over directories (movies) in this basedir
             for moviedir in basedir.iterdir():
+                if not moviedir.is_dir():
+                    continue
                 logger.debug(f"==== Processing directory {moviedir} ...")
                 # have we seen this directory before?
                 textfile_imdb_id: str | None = ""
@@ -477,7 +479,7 @@ class Playtime:
                     logger.warning(f":cross_mark: {moviedir} - Unable to get IMDB info, skipping")
                     fails.append(moviedir)
                     continue
-                logger.info(f"{moviedir} - Got Movie object {movie.short}")
+                logger.info(f"{moviedir} - Got movie {movie.imdb_id}: {movie.short}")
                 self.cache.directories[moviedir] = movie.imdb_id
                 if movie.imdb_id not in self.cache.movies:
                     self.cache.movies[movie.imdb_id] = movie
@@ -550,6 +552,8 @@ class Playtime:
         for basedir in self.cache.get_basedirs():
             # loop over directories in this basedir
             for moviedir in basedir.iterdir():
+                if not moviedir.is_dir():
+                    continue
                 # have we seen this directory before?
                 imdb_id = self.cache.directories.get(moviedir)
                 if not imdb_id:
