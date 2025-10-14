@@ -19,9 +19,9 @@ requires-python = ">=3.12"
 
 ########### DEPENDENCIES ###############
 dependencies = [
-    "cinemagoer >= 2023.5.1",
-    "cinemagoerng >= 0.4",
-    "parse-torrent-name >= 1.1.1",
+    "cinemagoer==2023.5.1",
+    "cinemagoerng==0.5.1",
+    "parse-torrent-name==1.1.1",
     "rich-argparse==1.7.1",
     "enrich==1.2.7",
 ]
@@ -60,9 +60,8 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools_scm]
 write_to = "_version.py"
 
-[tool.setuptools.packages.find]
-include = ["playtime"]
-
+[tool.setuptools]
+py-modules = ["playtime"]
 
 ########### RUFF ######################
 [tool.ruff]
