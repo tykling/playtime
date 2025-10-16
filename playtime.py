@@ -210,7 +210,7 @@ class Movie:
     def create_from_imdb_id(cls: type[Movie], imdb_id: str) -> Movie | None:
         """Initialise a Movie object from IMDB id."""
         try:
-            movie = web.get_title(f"{imdb_id}")
+            movie = web.get_title(f"{imdb_id}", accept_language="en")
         except TypedloadValueError:
             logger.warning(f":cross_mark: Unable to lookup IMDB id [cyan]{imdb_id}[/cyan] using cinemagoerng, skipping")
             return None
@@ -655,6 +655,8 @@ class Playtime:
 
     def create_symlink_dirs(self, *, symlink_dir: Path, categories: list[str], relative: bool = True) -> None:
         """Create symlink dirs for the requested categories."""
+        if not symlink_dir.exists():
+            symlink_dir.mkdir()
         symlink_coverdir = symlink_dir / ".covers"
         symlink_coverdir.mkdir(exist_ok=True)
         for category in categories:
@@ -667,9 +669,13 @@ class Playtime:
 
             # loop over things and create symlinks for each
             for thing in things:
-                # create the dir for this thing inside categorydir
-                thingdir = categorydir / thing
-                thingdir.mkdir()
+                if category in ["actors", "directors"]:
+                    # make a level with the first letter
+                    thingdir = categorydir / thing[0] / thing
+                else:
+                    thingdir = categorydir / thing
+                logger.debug(f"Creating dir {thingdir}")
+                thingdir.mkdir(parents=True)
                 # create new symlinks for this thing
                 for moviedir, imdb_id in self.cache.directories.items():
                     movie = self.cache.movies[imdb_id]
@@ -702,11 +708,18 @@ class Playtime:
                             logger.debug(f"Creating absolute symlink at {linkpath} to {moviedir}")
                             target = moviedir
                         linkpath.symlink_to(target, target_is_directory=True)
-                # rename dir to reflect the number of movies in it
+                # rename each dir to reflect the number of movies in it
                 count = len(list(thingdir.iterdir()))
                 countdir = thingdir.parent / f"{thingdir.name} ({count} movies)"
                 logger.debug(f"Renaming {thingdir} to {countdir}")
                 thingdir.rename(countdir)
+            if category in ["actors", "directors"]:
+                # rename letter dirs
+                for letterdir in categorydir.iterdir():
+                    count = len(list(letterdir.iterdir()))
+                    countdir = letterdir.parent / f"{letterdir.name} ({count} {category})"
+                    logger.debug(f"Renaming {letterdir} to {countdir}")
+                    letterdir.rename(countdir)
 
     def cache_purge_ids(self, imdb_ids: list[str]) -> None:
         """Purge a list of IMDB ids from the cache."""
