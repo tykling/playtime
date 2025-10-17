@@ -129,11 +129,11 @@ class Cache:
             f"{len(self.movies)} movies written to {cachepath}..."
         )
 
-    def get_category_values(self, category: str) -> set[str]:
+    def get_category_values(self, category: str, runtime_interval: int = 15) -> set[str]:
         """Get a list of unique values for the given category."""
         things = set()
         for movie in self.movies.values():
-            things.update(movie.get_category(category))
+            things.update(movie.get_category(category=category, runtime_interval=runtime_interval))
         return things
 
 
@@ -197,8 +197,11 @@ class Movie:
         age_secs = now - self.data_epoch
         return math.floor(age_secs / 86400)
 
-    def get_category(self, category: str) -> list[str]:
+    def get_category(self, category: str, runtime_interval: int = 15) -> list[str]:
         """Return data for the requested category as a list of strings."""
+        if category == "runtime":
+            lower = self.runtime // runtime_interval
+            return [f"{runtime_interval * lower}-{runtime_interval * (lower + 1)} minutes"]
         value = getattr(self, category)
         if isinstance(value, list):
             # return as-is
@@ -444,49 +447,14 @@ class Playtime:
             for moviedir in basedir.iterdir():
                 if not moviedir.is_dir():
                     continue
-                logger.debug(f"==== Processing directory {moviedir} ...")
-                # have we seen this directory before?
-                textfile_imdb_id: str | None = ""
-                if moviedir in self.cache.directories:
-                    logger.debug(f"{moviedir} - directory is known in cache, checking imdb.txt file...")
-                    textfile_imdb_id = self.find_imdb_id_in_textfiles(textfiles=[moviedir / "imdb.txt"])
-                    if textfile_imdb_id:
-                        if textfile_imdb_id == self.cache.directories[moviedir]:
-                            # this movie does not need reidentification, textfile matches cache
-                            logger.debug(
-                                f":white_check_mark: {moviedir} - Directory is known in the cache, "
-                                "and imdb.txt contains the correct ID."
-                            )
-                            continue
-                        logger.info(
-                            f"{moviedir} - textfile IMDB id {textfile_imdb_id} does not match "
-                            f"cached IMDB id {self.cache.directories[moviedir]} - re-identifying movie..."
-                        )
-                    else:
-                        logger.debug(f":white_check_mark: {moviedir} Directory is known in the cache.")
-                        continue
-                else:
-                    logger.info(f"{moviedir} - New movie directory found, identifying movie...")
-                # pass imdb_id if one was found in a textfile
-                movie = self.identify_movie(
+                result = self.update_cache_directory(
                     moviedir=moviedir,
-                    imdb_id=textfile_imdb_id or "",
-                    skip_imdb_search=skip_imdb_search,
-                    skip_textfiles=skip_textfiles,
                     search_confirmation=search_confirmation,
+                    skip_textfiles=skip_textfiles,
+                    skip_imdb_search=skip_imdb_search,
                 )
-                if not movie:
-                    logger.warning(f":cross_mark: {moviedir} - Unable to get IMDB info, skipping")
+                if not result:
                     fails.append(moviedir)
-                    continue
-                logger.info(f"{moviedir} - Got movie {movie.imdb_id}: {movie.short}")
-                self.cache.directories[moviedir] = movie.imdb_id
-                if movie.imdb_id not in self.cache.movies:
-                    self.cache.movies[movie.imdb_id] = movie
-                # write back cache file before continuing the loop,
-                # so the cache is not lost in case of a crash
-                self.cache.write_cache_file()
-
         if fails:
             logger.warning(
                 f"Done checking moviedirs. The following {len(fails)} directories could not be identified. "
@@ -494,6 +462,58 @@ class Playtime:
             )
             for fail in fails:
                 logger.warning(fail)
+
+    def update_cache_directory(
+        self,
+        *,
+        moviedir: Path,
+        search_confirmation: bool,
+        skip_textfiles: bool,
+        skip_imdb_search: bool,
+    ) -> bool:
+        """Identify movie in moviedir."""
+        logger.debug(f"==== Processing directory {moviedir} ...")
+        # have we seen this directory before?
+        textfile_imdb_id: str | None = ""
+        if moviedir in self.cache.directories:
+            logger.debug(f"{moviedir} - directory is known in cache, checking imdb.txt file...")
+            textfile_imdb_id = self.find_imdb_id_in_textfiles(textfiles=[moviedir / "imdb.txt"])
+            if textfile_imdb_id:
+                if textfile_imdb_id == self.cache.directories[moviedir]:
+                    # this movie does not need reidentification, textfile matches cache
+                    logger.debug(
+                        f":white_check_mark: {moviedir} - Directory is known in the cache, "
+                        "and imdb.txt contains the correct ID."
+                    )
+                    return True
+                logger.info(
+                    f"{moviedir} - textfile IMDB id {textfile_imdb_id} does not match "
+                    f"cached IMDB id {self.cache.directories[moviedir]} - re-identifying movie..."
+                )
+            else:
+                logger.debug(f":white_check_mark: {moviedir} Directory is known in the cache.")
+                return True
+        else:
+            logger.info(f"{moviedir} - New movie directory found, identifying movie...")
+        # pass imdb_id if one was found in a textfile
+        movie = self.identify_movie(
+            moviedir=moviedir,
+            imdb_id=textfile_imdb_id or "",
+            skip_imdb_search=skip_imdb_search,
+            skip_textfiles=skip_textfiles,
+            search_confirmation=search_confirmation,
+        )
+        if not movie:
+            logger.warning(f":cross_mark: {moviedir} - Unable to get IMDB info, skipping")
+            return False
+        logger.info(f"{moviedir} - Got movie {movie.imdb_id}: {movie.short}")
+        # update cache
+        self.cache.directories[moviedir] = movie.imdb_id
+        if movie.imdb_id not in self.cache.movies:
+            self.cache.movies[movie.imdb_id] = movie
+        # write back cache file before returning so the cache is not lost in case of a crash
+        self.cache.write_cache_file()
+        return True
 
     def clean_cache(self) -> None:
         """Clean cache."""
@@ -544,8 +564,6 @@ class Playtime:
             f"Listing movies, settings: identified_only: {identified_only}, "
             f"unidentified_only: {unidentified_only}, duplicates_only: {duplicates_only}"
         )
-        if unidentified_only and duplicates_only:
-            logger.warning("Only identified movies can have duplicates, -u and -d together will always list 0 movies.")
         # keep track of duplicates
         duplicates: dict[str, int] = {}
         # loop over basedirs
@@ -578,10 +596,8 @@ class Playtime:
                     logger.info(f":white_check_mark: OK ({count}) {moviedir}: {self.cache.movies[imdb_id].short}")
                     continue
 
-                if identified_only:
-                    # not identified, skip
-                    continue
-                logger.info(f":grey_question: NODATA {moviedir}")
+                if not identified_only:
+                    logger.info(f":grey_question: NODATA {moviedir}")
 
     def download_covers(self, *, save_covers_in_moviedirs: bool, force_download: bool) -> None:
         """Download covers for movies in the cache."""
@@ -653,7 +669,9 @@ class Playtime:
             for name in dirs:
                 (root / name).rmdir()
 
-    def create_symlink_dirs(self, *, symlink_dir: Path, categories: list[str], relative: bool = True) -> None:
+    def create_symlink_dirs(
+        self, *, symlink_dir: Path, categories: list[str], relative: bool = True, runtime_interval: int = 30
+    ) -> None:
         """Create symlink dirs for the requested categories."""
         if not symlink_dir.exists():
             symlink_dir.mkdir()
@@ -665,54 +683,19 @@ class Playtime:
             logger.debug(f"Creating symlinks by {category} in {categorydir}...")
 
             # find unique set of things in this category (years, genres, directors...)
-            things = self.cache.get_category_values(category=category)
+            things = self.cache.get_category_values(category=category, runtime_interval=runtime_interval)
 
             # loop over things and create symlinks for each
             for thing in things:
-                if category in ["actors", "directors"]:
-                    # make a level with the first letter
-                    thingdir = categorydir / thing[0] / thing
-                else:
-                    thingdir = categorydir / thing
-                logger.debug(f"Creating dir {thingdir}")
-                thingdir.mkdir(parents=True)
-                # create new symlinks for this thing
-                for moviedir, imdb_id in self.cache.directories.items():
-                    movie = self.cache.movies[imdb_id]
-                    # does this movie need a symlink for this thing?
-                    if thing in self.cache.movies[imdb_id].get_category(category):
-                        # create directory for this movie if needed
-                        subdir = thingdir / movie.dirname
-                        subdir.mkdir(exist_ok=True)
-                        # handle cover for this movie
-                        cache_cover = self.cache.coverdir / movie.cover_filename
-                        symlink_cover = symlink_coverdir / movie.cover_filename
-                        movie_cover = subdir / "poster.jpg"
-                        if cache_cover.exists():
-                            if not symlink_cover.exists():
-                                logger.debug(f"Copying {cache_cover} to {symlink_cover}")
-                                shutil.copy(cache_cover, symlink_cover)
-                            if not movie_cover.exists():
-                                logger.debug(f"Creating a relative symlink at {movie_cover} to {symlink_cover}")
-                                movie_cover.symlink_to(symlink_cover.relative_to(subdir, walk_up=True))
-                        linkpath = subdir / moviedir.name
-                        if linkpath.is_symlink():
-                            # The link to this movie already exists.
-                            # This can happen when the same moviedir name
-                            # exists in multiple basedirs, ignore and continue
-                            continue
-                        if relative:
-                            logger.debug(f"Creating relative symlink at {linkpath} to {moviedir}")
-                            target = moviedir.relative_to(linkpath.parent, walk_up=True)
-                        else:
-                            logger.debug(f"Creating absolute symlink at {linkpath} to {moviedir}")
-                            target = moviedir
-                        linkpath.symlink_to(target, target_is_directory=True)
-                # rename each dir to reflect the number of movies in it
-                count = len(list(thingdir.iterdir()))
-                countdir = thingdir.parent / f"{thingdir.name} ({count} movies)"
-                logger.debug(f"Renaming {thingdir} to {countdir}")
-                thingdir.rename(countdir)
+                thingdir = self.get_thingdir(category=category, categorydir=categorydir, thing=thing)
+                self.create_symlinks_for_thing(
+                    thing=thing,
+                    thingdir=thingdir,
+                    category=category,
+                    symlink_coverdir=symlink_coverdir,
+                    relative=relative,
+                    runtime_interval=runtime_interval,
+                )
             if category in ["actors", "directors"]:
                 # rename letter dirs
                 for letterdir in categorydir.iterdir():
@@ -720,6 +703,71 @@ class Playtime:
                     countdir = letterdir.parent / f"{letterdir.name} ({count} {category})"
                     logger.debug(f"Renaming {letterdir} to {countdir}")
                     letterdir.rename(countdir)
+
+    def get_thingdir(self, *, category: str, categorydir: Path, thing: str) -> Path:
+        """Return the dir for this thing (actor, director, genre...)."""
+        if category in ["actors", "directors"]:
+            # make a level with the first letter
+            return categorydir / thing[0] / thing
+        if category in ["runtime", "rankings"]:
+            return categorydir / thing
+        # year, genre
+        return categorydir / thing
+
+    def create_symlinks_for_thing(  # noqa: PLR0913
+        self,
+        *,
+        thing: str,
+        thingdir: Path,
+        category: str,
+        symlink_coverdir: Path,
+        relative: bool,
+        runtime_interval: int = 15,
+    ) -> None:
+        """Create symlinks for a thing (year, actor, genre, director, runtime)."""
+        logger.debug(f"Creating dir {thingdir}")
+        thingdir.mkdir(parents=True, exist_ok=True)
+        # loop over moviedirs and create new symlinks for this thing
+        for moviedir, imdb_id in self.cache.directories.items():
+            logger.debug(f"Processing moviedir {moviedir} ...")
+            movie = self.cache.movies[imdb_id]
+            # does this movie need a symlink for this thing?
+            if thing in self.cache.movies[imdb_id].get_category(category=category, runtime_interval=runtime_interval):
+                # create directory for this movie if needed
+                subdir = thingdir / movie.dirname
+                subdir.mkdir(exist_ok=True)
+                # handle cover for this movie
+                cache_cover = self.cache.coverdir / movie.cover_filename
+                symlink_cover = symlink_coverdir / movie.cover_filename
+                movie_cover = subdir / "poster.jpg"
+                if cache_cover.exists():
+                    if not symlink_cover.exists():
+                        logger.debug(f"Copying {cache_cover} to {symlink_cover}")
+                        shutil.copy(cache_cover, symlink_cover)
+                    if not movie_cover.exists():
+                        logger.debug(f"Creating a relative symlink at {movie_cover} to {symlink_cover}")
+                        movie_cover.symlink_to(symlink_cover.relative_to(subdir, walk_up=True))
+                linkpath = subdir / moviedir.name
+                if linkpath.is_symlink():
+                    # The link to this movie already exists.
+                    # This can happen when the same moviedir name
+                    # exists in multiple basedirs, ignore and continue
+                    continue
+                if relative:
+                    logger.debug(f"Creating relative symlink at {linkpath} to {moviedir}")
+                    target = moviedir.relative_to(linkpath.parent, walk_up=True)
+                else:
+                    logger.debug(f"Creating absolute symlink at {linkpath} to {moviedir}")
+                    target = moviedir
+                linkpath.symlink_to(target, target_is_directory=True)
+        # rename each thingdir to reflect the number of movies in it
+        count = len(list(thingdir.iterdir()))
+        countdir = thingdir.parent / f"{thingdir.name} ({count} movies)"
+        logger.debug(f"Renaming {thingdir} to {countdir}")
+        thingdir.rename(countdir)
+
+    def create_runtime_symlinks(self, *, symlink_dir: Path, relative: bool = True) -> None:
+        """Create symlink dirs for movie runtimes."""
 
     def cache_purge_ids(self, imdb_ids: list[str]) -> None:
         """Purge a list of IMDB ids from the cache."""
@@ -877,7 +925,7 @@ def get_parser() -> argparse.ArgumentParser:
         "-C",
         "--categories",
         nargs="+",
-        default=["genres", "year", "directors", "actors"],
+        default=["genres", "year", "directors", "actors", "runtime"],
         help="Movie categories to enable for 'playtime symlink'.",
     )
 
