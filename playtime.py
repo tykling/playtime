@@ -200,8 +200,15 @@ class Movie:
     def get_category(self, category: str, runtime_interval: int = 15) -> list[str]:
         """Return data for the requested category as a list of strings."""
         if category == "runtime":
+            if not self.runtime:
+                return []
             lower = self.runtime // runtime_interval
             return [f"{runtime_interval * lower}-{runtime_interval * (lower + 1)} minutes"]
+        if category in ["top_ranking", "bottom_ranking"]:
+            ranking = getattr(self, category)
+            if not ranking:
+                return []
+            return [f"{ranking:04}. {self.dirname}"]
         value = getattr(self, category)
         if isinstance(value, list):
             # return as-is
@@ -711,6 +718,8 @@ class Playtime:
             return categorydir / thing[0] / thing
         if category in ["runtime", "rankings"]:
             return categorydir / thing
+        if category in ["top_ranking", "bottom_ranking"]:
+            return categorydir
         # year, genre
         return categorydir / thing
 
@@ -725,16 +734,23 @@ class Playtime:
         runtime_interval: int = 15,
     ) -> None:
         """Create symlinks for a thing (year, actor, genre, director, runtime)."""
-        logger.debug(f"Creating dir {thingdir}")
-        thingdir.mkdir(parents=True, exist_ok=True)
+        if not thingdir.exists():
+            logger.debug(f"Creating dir {thingdir}")
+            thingdir.mkdir(parents=True)
+
         # loop over moviedirs and create new symlinks for this thing
         for moviedir, imdb_id in self.cache.directories.items():
-            logger.debug(f"Processing moviedir {moviedir} ...")
             movie = self.cache.movies[imdb_id]
+
             # does this movie need a symlink for this thing?
             if thing in self.cache.movies[imdb_id].get_category(category=category, runtime_interval=runtime_interval):
                 # create directory for this movie if needed
-                subdir = thingdir / movie.dirname
+                dirname = (
+                    movie.get_category(category=category)[0]
+                    if category in ["top_ranking", "bottom_ranking"]
+                    else movie.dirname
+                )
+                subdir = thingdir / dirname
                 subdir.mkdir(exist_ok=True)
                 # handle cover for this movie
                 cache_cover = self.cache.coverdir / movie.cover_filename
@@ -760,6 +776,8 @@ class Playtime:
                     logger.debug(f"Creating absolute symlink at {linkpath} to {moviedir}")
                     target = moviedir
                 linkpath.symlink_to(target, target_is_directory=True)
+        if category in ["top_ranking", "bottom_ranking"]:
+            return
         # rename each thingdir to reflect the number of movies in it
         count = len(list(thingdir.iterdir()))
         countdir = thingdir.parent / f"{thingdir.name} ({count} movies)"
@@ -925,7 +943,7 @@ def get_parser() -> argparse.ArgumentParser:
         "-C",
         "--categories",
         nargs="+",
-        default=["genres", "year", "directors", "actors", "runtime"],
+        default=["genres", "year", "directors", "actors", "runtime", "top_ranking", "bottom_ranking"],
         help="Movie categories to enable for 'playtime symlink'.",
     )
 
