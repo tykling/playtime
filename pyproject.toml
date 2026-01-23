@@ -19,11 +19,12 @@ requires-python = ">=3.12"
 
 ########### DEPENDENCIES ###############
 dependencies = [
-    "cinemagoer==2023.5.1",
+    "django-imdb==0.3.2",
     "cinemagoerng==0.5.1",
-    "parse-torrent-name==1.1.1",
-    "rich-argparse==1.7.1",
     "enrich==1.2.7",
+    "nanodjango==0.12.2",
+    "parse-torrent-title==2.8.1",
+    "rich-argparse==1.7.1",
 ]
 
 [project.optional-dependencies]
@@ -93,6 +94,13 @@ ignore = [
     "INP001", # File `conftest.py` is part of an implicit namespace package. Add an `__init__.py`
     "PT004", # Fixture ... does not return anything, add leading underscore
 ]
+"migrations/*.py" = [
+    "D100", # missing docstring
+    "D101", # missing docstring
+    "D104", # missing docstring
+    "RUF012", # mutable must be annotated with classvar
+]
+
 
 ############ MYPY #####################
 [tool.mypy]
@@ -101,6 +109,10 @@ exclude = [
     "build/",
     "venv/",
 ]
+#plugins = ["mypy_django_plugin.main"]
+
+[tool.django-stubs]
+#django_settings_module = "playtime.settings"
 
 
 ########### COVERAGE.PY ###############
@@ -122,7 +134,7 @@ addopts = "--cov=. --cov-report=xml --cov-report=html --cov-config=./pyproject.t
 
 ########### TOX #######################
 [tool.tox]
-envlist = ["py312", "py313"]
+envlist = ["py312", "py313", "py314"]
 skipsdist = true
 
 [tool.tox.env_run_base]
