@@ -19,7 +19,7 @@ requires-python = ">=3.11"
 
 ########### DEPENDENCIES ###############
 dependencies = [
-    "django-imdb==0.3.2",
+    "django-imdb==0.3.3",
     "cinemagoerng==0.5.1",
     "enrich==1.2.7",
     "nanodjango==0.12.2",
@@ -105,7 +105,7 @@ ignore = [
 
 ############ MYPY #####################
 [tool.mypy]
-python_version = "3.12"
+python_version = "3.11"
 exclude = [
     "build/",
     "venv/",
@@ -135,7 +135,7 @@ addopts = "--cov=. --cov-report=xml --cov-report=html --cov-config=./pyproject.t
 
 ########### TOX #######################
 [tool.tox]
-envlist = ["py312", "py313", "py314"]
+envlist = ["py311", "py312", "py313", "py314"]
 skipsdist = true
 
 [tool.tox.env_run_base]
