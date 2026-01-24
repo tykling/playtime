@@ -14,7 +14,7 @@ keywords = ["movies", "metadata", "symlinks"]
 license = "BSD-3-Clause"
 name = "playtime"
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.11"
 
 
 ########### DEPENDENCIES ###############
@@ -25,6 +25,7 @@ dependencies = [
     "nanodjango==0.12.2",
     "parse-torrent-title==2.8.1",
     "rich-argparse==1.7.1",
+    "django-stubs-ext==5.2.9",
 ]
 
 [project.optional-dependencies]
