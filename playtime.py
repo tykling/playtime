@@ -60,7 +60,7 @@ MiB = 1024 * 1024
 IMDB_ID_REGEX = "(tt[0-9]{7,10}+)"
 
 app = Django(
-    SQLITE_DATABASE="/home/user/.cache/playtime2.db",
+    SQLITE_DATABASE=Path("~/.cache/playtime/playtime.db").expanduser(),
     EXTRA_APPS=["django_imdb"],
 )
 
