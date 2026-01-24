@@ -758,8 +758,6 @@ def main(mockargs: list[str] | None = None) -> None:
             skip_title_principals=args.skip_title_principals,
             skip_title_episodes=args.skip_title_episodes,
             skip_title_ratings=args.skip_title_ratings,
-            skip_records=args.skip_records,
-            max_records=args.max_records,
             max_tsv_age_seconds=args.max_tsv_age_seconds,
         )
 
