@@ -14,7 +14,7 @@ repos:
         pass_filenames: false
         additional_dependencies:
           - "cinemagoerng==0.5.1"
-          - "django-imdb==0.3.4"
+          - "django-imdb==0.3.5"
           - "django-stubs[compatible-mypy]"
           - "enrich==1.2.7"
           - "nanodjango==0.12.2"

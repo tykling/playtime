@@ -20,7 +20,7 @@ requires-python = ">=3.11"
 ########### DEPENDENCIES ###############
 dependencies = [
     "cinemagoerng==0.5.1",
-    "django-imdb==0.3.4",
+    "django-imdb==0.3.5",
     "django-stubs-ext==5.2.9",
     "enrich==1.2.7",
     "nanodjango==0.12.2",
