@@ -19,13 +19,14 @@ requires-python = ">=3.11"
 
 ########### DEPENDENCIES ###############
 dependencies = [
-    "django-imdb==0.3.3",
     "cinemagoerng==0.5.1",
+    "django-imdb==0.3.4",
+    "django-stubs-ext==5.2.9",
     "enrich==1.2.7",
     "nanodjango==0.12.2",
     "parse-torrent-title==2.8.1",
+    "pocketsearch==0.41.0",
     "rich-argparse==1.7.1",
-    "django-stubs-ext==5.2.9",
 ]
 
 [project.optional-dependencies]
