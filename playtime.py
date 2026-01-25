@@ -173,7 +173,9 @@ class Playtime:
         self, *, directories: list[Path], persist: bool, force: bool, ignore_textfiles: bool
     ) -> None:
         """Identify titles in directories."""
-        for path in directories:
+        for relpath in directories:
+            # resolve relative dirs
+            path = relpath.resolve()
             # identify directory
             title, source = self.identify_directory(directory=path, ignore_textfiles=ignore_textfiles, force=force)
             if not title:
@@ -528,10 +530,13 @@ def get_parser() -> argparse.ArgumentParser:
         "identify", help="Identify titles in directories, and update local database with the results."
     )
     identify_parser.add_argument(
-        "moviedirs",
+        "titledirs",
         type=Path,
         nargs="+",
-        help="Required. The directories containing movies to identify. Supports shell globs (like /movies/*)",
+        help=(
+            "Required. The directories containing titles to identify. "
+            "Supports shell globs (like /movies/*). Supports multiple dirs (like /a/* /b/*)."
+        ),
     )
     identify_parser.add_argument(
         "-f",
@@ -561,11 +566,11 @@ def get_parser() -> argparse.ArgumentParser:
 
     ###########################################
     # playtime symlink
-    symlink_parser = subparsers.add_parser("symlink", help="Create directory hierachy with movie categories.")
+    symlink_parser = subparsers.add_parser("symlink", help="Create directory hierachy with title categories.")
     symlink_parser.add_argument(
         "symlinkdir",
         type=Path,
-        help="Required. The directory in which to create the movie category symlinks.",
+        help="Required. The directory in which to create the title category symlinks.",
     )
     symlink_parser.add_argument(
         "-C",
@@ -777,7 +782,7 @@ def main(mockargs: list[str] | None = None) -> None:
 
     elif args.subparser_name == "identify":
         pt.identify_directories(
-            directories=args.moviedirs, force=args.force, ignore_textfiles=args.ignore_textfiles, persist=args.persist
+            directories=args.titledirs, force=args.force, ignore_textfiles=args.ignore_textfiles, persist=args.persist
         )
 
     elif args.subparser_name == "symlink":
