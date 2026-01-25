@@ -201,13 +201,13 @@ class Playtime:
                 continue
 
             # download cover?
+            coversrc = self.get_coverpath(title)
             url = title.cgngdata.data["primary_image"]  # type: ignore[attr-defined]
             if not self.get_coverpath(title).exists() and url is not None:
                 logger.debug(f"Downloading cover for {title}")
-                download_file(url=url, path=self.get_coverpath(title))
+                download_file(url=url, path=coversrc)
 
             # copy cover to directory?
-            coversrc = self.get_coverpath(title)
             coverdst = path / "poster.jpg"
             if coversrc.exists() and not coverdst.exists():
                 shutil.copy(coversrc, coverdst)
@@ -372,7 +372,6 @@ class Playtime:
                     subdir = self.get_category_subdir(
                         categorydir=categorydir, category=category, thing=thing, title=title
                     )
-                    # subdir is like "symlinkdir/genres/western/Django Unchained (2012)"
                     logger.debug(f"Creating {category} symlinks for {thing} in subdir {subdir}")
                     subdir.mkdir(exist_ok=True, parents=True)
                     # loop over copies of this title
@@ -381,8 +380,8 @@ class Playtime:
                         linkpath = subdir / Path(directory.path).name
                         if linkpath.is_symlink():
                             # The link to this movie already exists.
-                            # This can happen when the same moviedir name
-                            # exists in multiple basedirs, ignore and continue
+                            # This can happen when the same titledir name
+                            # exists in multiple places, ignore and continue
                             continue
                         if relative:
                             logger.debug(f"Creating relative symlink at {linkpath} to {directory.path}")
@@ -405,8 +404,11 @@ class Playtime:
             coversource = self.get_coverpath(title=title)
             if not coversource.exists():
                 return
+            # copy cover from the source
             shutil.copy(coversource, coverpath)
-        coverdest = cover_dest_dir / "poster.jpg"  # .relative_to(cover_dest_dir, walk_up=True)
+        coverdest = cover_dest_dir / "poster.jpg"
+        # make symlink destination relative
+        coverpath = os.path.relpath(coverpath, coverdest.parent)
         if not coverdest.exists():
             logger.debug(f"Creating cover symlink for {title} from {coverdest} to {coverpath}")
             coverdest.symlink_to(coverpath)
