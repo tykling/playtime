@@ -353,6 +353,7 @@ class Playtime:
 
     def create_symlink_dirs(self, *, symlink_dir: Path, categories: list[str], relative: bool = True) -> None:
         """Create symlink dirs for the requested categories."""
+        symlink_dir = symlink_dir.resolve()
         if not symlink_dir.exists():
             symlink_dir.mkdir()
         coverdir = symlink_dir / ".covers"
