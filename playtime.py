@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import re
 import shutil
 import sys
@@ -317,14 +318,11 @@ class Playtime:
 
     def clean_category_dir(self, category_dir: Path) -> None:
         """Clean any old directories and symlinks from the categorydir."""
+        if category_dir.exists():
+            # the clean-slate protocol, sir?
+            shutil.rmtree(category_dir)
         # make sure the category dir exists
-        category_dir.mkdir(exist_ok=True, parents=True)
-        # delete any files in categorydir
-        for root, dirs, files in category_dir.walk(top_down=False):
-            for name in files:
-                (root / name).unlink()
-            for name in dirs:
-                (root / name).rmdir()
+        category_dir.mkdir(parents=True)
 
     def get_title_categories(self, title: Title, category: str) -> list[str]:
         """Return symlink categories for a Title and category."""
@@ -385,10 +383,10 @@ class Playtime:
                             continue
                         if relative:
                             logger.debug(f"Creating relative symlink at {linkpath} to {directory.path}")
-                            target = Path(directory.path).relative_to(linkpath.parent, walk_up=True)
+                            target = Path(os.path.relpath(directory.path, linkpath.parent))
                         else:
                             logger.debug(f"Creating absolute symlink at {linkpath} to {directory.path}")
-                            target = subdir
+                            target = Path(subdir)
                         # create symlink to this directory
                         linkpath.symlink_to(target, target_is_directory=True)
                         self.symlink_cover(cover_dest_dir=linkpath.parent, symlink_dir=symlink_dir, title=title)
@@ -423,7 +421,9 @@ class Playtime:
         elif category == "rating":
             subdir = categorydir / str(thing) / f"{title.dirname} ({title.rating.votes} votes)"  # type: ignore[attr-defined]
         elif category in ["top_ranking", "bottom_ranking"]:
-            subdir = categorydir / f"{thing:04}. {title.dirname} ({title.rating} with {title.rating.votes} votes)"  # type: ignore[attr-defined]
+            subdir = (
+                categorydir / f"{thing:04}. {title.dirname} ({title.rating.rating} with {title.rating.votes} votes)"  # type: ignore[attr-defined]
+            )
         else:
             subdir = categorydir / str(thing) / title.dirname
         return subdir
