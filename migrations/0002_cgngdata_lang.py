@@ -11,7 +11,7 @@ class Migration(migrations.Migration):
     operations = [
         migrations.AddField(
             model_name="cgngdata",
-            name="lang",
+            name="language",
             field=models.CharField(
                 default="en",
                 help_text="The language code used when fetching this data.",
