@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, TypeAlias
 
 import django_stubs_ext
+import iso639
 import PTN  # type: ignore[import-untyped]
 from cinemagoerng import web as imdb
 from cinemagoerng.model import (
@@ -411,12 +412,23 @@ class Playtime:
         elif category in ["top_ranking", "bottom_ranking"]:
             things = [title.cgngdata.data[category]] if hasattr(title, "cgngdata") else []
         elif category == "language":
-            things = title.cgngdata.data["language_codes"] if hasattr(title, "cgngdata") else []
+            things = (
+                [self.iso639_code_to_name(code) for code in title.cgngdata.data["language_codes"]]
+                if hasattr(title, "cgngdata")
+                else []
+            )
         elif category == "languages":
             things = [",".join(title.cgngdata.data["language_codes"])] if hasattr(title, "cgngdata") else []
         else:
             things = []
         return things
+
+    def iso639_code_to_name(self, code: str) -> str:
+        """Translate an iso639 language code like 'da' to 'Danish'."""
+        try:
+            return f"{iso639.Language.match(code).name} ({code})"
+        except iso639.language.LanguageNotFoundError:
+            return code
 
     def create_symlink_dirs(
         self, *, symlink_dir: Path, categories: list[str], accept_languages: list[str], relative: bool = True

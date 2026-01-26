@@ -26,6 +26,7 @@ dependencies = [
     "nanodjango==0.12.2",
     "parse-torrent-title==2.8.1",
     "pocketsearch==0.41.0",
+    "python-iso639==2025.11.16",
     "rich-argparse==1.7.1",
 ]
 
