@@ -14,6 +14,7 @@ More info at https://github.com/tykling/playtime
 from __future__ import annotations
 
 import argparse
+import hashlib
 import logging
 import os
 import re
@@ -99,16 +100,21 @@ class Directory(models.Model):
     """Represents a directory containing a single movie or episode."""
 
     title: models.ForeignKey[Title, Title] = models.ForeignKey(
-        "django_imdb.Title", on_delete=models.PROTECT, related_name="directories"
+        "django_imdb.Title", null=True, blank=True, on_delete=models.PROTECT, related_name="directories"
     )
     path: models.CharField[str, str] = models.CharField(unique=True, max_length=255, help_text="The directory")
 
     def __str__(self) -> str:
         """Text representation of a Directory."""
-        return f"{self.path} - {self.title}"
+        if self.title:
+            return f"{self.path} - {self.title}"
+        return f"{self.path} - UNIDENTIFIED"
 
     def write_imdb_url(self) -> None:
         """Write IMDB URL to imdb.txt file."""
+        if not self.title:
+            logger.debug(f"Cannot write IMDB url for {self}")
+            return
         txtpath = Path(self.path, "imdb.txt")
         with txtpath.open("w") as f:
             f.write(f"{self.title.imdb_url}\n")
@@ -119,7 +125,7 @@ class Directory(models.Model):
 class CGNGData(models.Model):
     """Movie metadata from CGNG. Contains cover+ranking and more which is not available from django-imdb."""
 
-    title: models.OneToOneField[Title, Title] = models.OneToOneField(
+    title: models.ForeignKey[Title, Title] = models.ForeignKey(
         "django_imdb.Title", on_delete=models.PROTECT, related_name="cgngdata"
     )
     data: models.JSONField = models.JSONField(help_text="The movie data from CGNG")
@@ -213,14 +219,18 @@ class Playtime:
         for relpath in directories:
             # resolve relative dirs
             path = relpath.resolve()
+            if not path.exists():
+                logger.warning(f":cross_mark: {path} - Directory does not exist - skipping")
+                continue
+
             # identify directory
             title, source = self.identify_directory(directory=path, ignore_textfiles=ignore_textfiles, force=force)
-            if not title:
+            if title:
+                logger.info(f"{path} - {title} ({source})")
+            else:
                 logger.warning(f":cross_mark: {path} - Unable to identify title.")
-                continue
-            logger.info(f"{path} - {title} ({source})")
 
-            # persist directory identification in database
+            # persist directory in database
             directory, _ = Directory.objects.get_or_create(
                 path=path,
                 defaults={
@@ -228,27 +238,38 @@ class Playtime:
                 },
             )
 
+            # the rest requires a Title
+            if not title:
+                continue
+
             # persist identification in directory?
             if persist:
                 directory.write_imdb_url()
 
-            if not hasattr(title, "cgngdata"):
-                # get extra metadata in english
-                cgng = self.get_cgng_data(title=title, accept_languages=accept_languages)
-                if cgng is None:
-                    continue
+            # get extra metadata in suitable language
+            language = self.get_title_language(title=title, accept_languages=accept_languages)
+            cgng = self.get_cgng_data(title=title, language=language)
+            if cgng is None:
+                continue
 
             # download cover?
-            coversrc = self.get_coverpath(title)
-            url = title.cgngdata.data["primary_image"]  # type: ignore[attr-defined]
-            if not self.get_coverpath(title).exists() and url is not None:
-                logger.debug(f"Downloading cover for {title}")
+            coversrc = self.get_coverpath(title=title, lang=language)
+            url = cgng.data["primary_image"]
+            if not coversrc.exists() and url is not None:
+                logger.debug(f"Downloading cover for {title} in language {language} to path {coversrc}")
                 download_file(url=url, path=coversrc)
+            if not coversrc.exists():
+                logger.warning(f"Unable to download cover for {title} in language {language} to path {coversrc}")
+                continue
 
             # copy cover to directory?
             coverdst = path / "poster.jpg"
-            if coversrc.exists() and not coverdst.exists():
-                shutil.copy(coversrc, coverdst)
+            if coverdst.exists() and self.file_hash(coversrc) == self.file_hash(coverdst):
+                # files are the same, no need to copy again
+                continue
+            # cover is missing or changed, copy it over
+            logger.debug(f"Copying cover for {title} in language {language} from path {coversrc} to {coverdst}")
+            shutil.copy(coversrc, coverdst)
 
     def identify_directory(
         self,
@@ -319,50 +340,37 @@ class Playtime:
             logger.info(directory)
 
     def update_extra_metadata(self, accept_languages: list[str]) -> None:
-        """Get or update metadata for all Directory titles."""
+        """Update metadata (if needed) for all Directory titles."""
         for title in Title.objects.filter(directories__isnull=False).distinct():
-            self.get_cgng_data(title=title, accept_languages=accept_languages)
+            language = self.get_title_language(title=title, accept_languages=accept_languages)
+            self.get_cgng_data(title=title, language=language)
 
     def get_cgng_data(
         self,
         title: Title,
-        accept_languages: list[str],
+        language: str = "en",
         keys: tuple[str, ...] = ("bottom_ranking", "top_ranking", "country_codes", "language_codes", "primary_image"),
         max_age_seconds: int = 86400 * 14,
     ) -> CGNGData | None:
         """Create or update a CGNGData object from IMDB id."""
         # check for existing data
         try:
-            existing = CGNGData.objects.get(title_id=title.title_id)
-            if (
-                existing.language in accept_languages
-                and (timezone.now() - existing.updated_at).seconds < max_age_seconds
-            ):
+            existing = CGNGData.objects.get(title_id=title.title_id, language=language)
+            if (timezone.now() - existing.updated_at).seconds < max_age_seconds:
                 # no need to get new data
                 return existing
         except CGNGData.DoesNotExist:
             pass
 
-        # do initial request in english
-        language = "en"
         data = self.cgng_lookup(title=title, language=language)
         if data is None:
             return None
 
-        # get non-english metadata?
-        most_spoken = data.language_codes[0]
-        if most_spoken != "en" and accept_languages and most_spoken in accept_languages:
-            # the most-spoken language in this movie is not-english,
-            # but among languages acceptable to the user, get metadata in this language
-            i18ndata = self.cgng_lookup(title=title, language=most_spoken)
-            if i18ndata is not None:
-                data = i18ndata
-                language = most_spoken
-
-        # save in database
+        # create a dict of requested keys
         modeldata = {k: v for k, v in data.__dict__.items() if k in keys}
+        # save in database
         cgng, created = CGNGData.objects.update_or_create(
-            title_id=title.title_id, defaults={"data": modeldata, language: language}
+            title_id=title.title_id, language=language, defaults={"data": modeldata}
         )
         if created:
             logger.debug(f"Downloaded extra metadata for title {title} in language {language}")
@@ -385,15 +393,15 @@ class Playtime:
     #### SYMLINKS #####
 
     def clean_category_dir(self, category_dir: Path) -> None:
-        """Clean any old directories and symlinks from the categorydir."""
+        """Clean any old directories and symlinks from the category_dir."""
         if category_dir.exists():
             # the clean-slate protocol, sir?
             shutil.rmtree(category_dir)
         # make sure the category dir exists
         category_dir.mkdir(parents=True)
 
-    def get_title_categories(self, title: Title, category: str) -> list[str]:
-        """Return symlink categories for a Title and category."""
+    def get_category_things(self, title: Title, category: str) -> list[str]:
+        """Return symlink things for a Title and category."""
         if category == "genres":
             things = title.genrelist
         elif category == "years":
@@ -410,18 +418,18 @@ class Playtime:
         elif category == "rating":
             things = [title.rating.rating] if hasattr(title, "rating") else []
         elif category in ["top_ranking", "bottom_ranking"]:
-            things = [title.cgngdata.data[category]] if hasattr(title, "cgngdata") else []
+            things = [title.cgngdata.first().data[category]] if title.cgngdata.exists() else []  # type: ignore[attr-defined]
         elif category == "language":
             things = (
-                [self.iso639_code_to_name(code) for code in title.cgngdata.data["language_codes"]]
-                if hasattr(title, "cgngdata")
+                [self.iso639_code_to_name(code) for code in title.cgngdata.first().data["language_codes"]]  # type: ignore[attr-defined]
+                if title.cgngdata.exists()  # type: ignore[attr-defined]
                 else []
             )
         elif category == "languages":
-            things = [",".join(title.cgngdata.data["language_codes"])] if hasattr(title, "cgngdata") else []
+            things = [",".join(title.cgngdata.first().data["language_codes"])] if title.cgngdata.exists() else []  # type: ignore[attr-defined]
         else:
             things = []
-        return things
+        return [x for x in things if x is not None and x != ""]
 
     def iso639_code_to_name(self, code: str) -> str:
         """Translate an iso639 language code like 'da' to 'Danish'."""
@@ -430,120 +438,224 @@ class Playtime:
         except iso639.language.LanguageNotFoundError:
             return code
 
-    def create_symlink_dirs(
-        self, *, symlink_dir: Path, categories: list[str], accept_languages: list[str], relative: bool = True
-    ) -> None:
-        """Create symlink dirs for the requested categories."""
+    def create_symlink_dirs(self, *, symlink_dir: Path, categories: list[str], accept_languages: list[str]) -> None:
+        """Create symlink dirs for the requested categories.
+
+        Cover cache in symlinkdir:
+           /movies/playtime/.titles/tt6264654/.covers/tt6264654.en.jpg
+
+        Title metadata in symlinkdir:
+           /movies/playtime/genres/Comedy/Free Guy (2021)/metadata -> /movies/playtime/.titles/tt6264654/
+        """
         symlink_dir = symlink_dir.resolve()
-        if not symlink_dir.exists():
-            symlink_dir.mkdir()
-        coverdir = symlink_dir / ".covers"
-        coverdir.mkdir(exist_ok=True)
+        # create .titles dir for covers and metadata by title
+        titles_dir = symlink_dir / ".titles"
+        titles_dir.mkdir(exist_ok=True, parents=True)
+        # loop over categories
         for category in categories:
-            categorydir = symlink_dir / category
-            self.clean_category_dir(category_dir=categorydir)
-            logger.info(f"Creating symlinks by {category} in {categorydir} with languages {accept_languages}...")
-            for title in Title.objects.filter(directories__isnull=False):
-                logger.debug(f"Creating {category} symlinks for {title}")
+            category_dir = symlink_dir / category
+            self.clean_category_dir(category_dir=category_dir)
+            logger.info(f"Creating {category} symlinks in {category_dir} with languages {accept_languages}...")
+            # loop over titles present in one or more directories
+            for title in Title.objects.filter(directories__isnull=False).distinct():
+                # /movies/playtime/.titles/tt6264654/
+                title_dir = titles_dir / title.title_id
+                # get title language (for cover)
+                lang = self.get_title_language(title=title, accept_languages=accept_languages)
+                things = self.get_category_things(title=title, category=category)
+                if not things:
+                    continue
+                logger.debug(f"Creating category {category} symlinks for {title} things: {things}")
                 # loop over things in this category for this title
-                for thing in self.get_title_categories(title=title, category=category):
+                # thing is Western, Drama, actor name, year and such
+                for thing in things:
                     if thing is None or thing == "":
                         continue
-                    # thing is Western, Drama, actor name, year and such
                     subdir = self.get_category_subdir(
-                        categorydir=categorydir,
+                        category_dir=category_dir,
                         category=category,
                         thing=thing,
                         title=title,
                         accept_languages=accept_languages,
                     )
                     logger.debug(f"Creating {category} symlinks for {thing} in subdir {subdir}")
-                    subdir.mkdir(exist_ok=True, parents=True)
-                    # loop over copies of this title
-                    for directory in title.directories.all():  # type: ignore[attr-defined]
-                        # the path of the symlink (not the link target)
-                        linkpath = subdir / Path(directory.path).name
-                        if linkpath.is_symlink():
-                            # The link to this movie already exists.
-                            # This can happen when the same titledir name
-                            # exists in multiple places, ignore and continue
-                            continue
-                        if relative:
-                            logger.debug(f"Creating relative symlink at {linkpath} to {directory.path}")
-                            target = Path(os.path.relpath(directory.path, linkpath.parent))
-                        else:
-                            logger.debug(f"Creating absolute symlink at {linkpath} to {directory.path}")
-                            target = Path(subdir)
-                        # create symlink to this directory
-                        linkpath.symlink_to(target, target_is_directory=True)
-                        self.symlink_cover(cover_dest_dir=linkpath.parent, symlink_dir=symlink_dir, title=title)
+                    self.symlink_title_dirs(
+                        subdir=subdir, title=title, symlink_dir=symlink_dir, lang=lang, title_dir=title_dir
+                    )
+        if "unidentified" in categories:
+            self.symlink_unidentified_dirs(symlink_dir=symlink_dir)
+        if "duplicates" in categories:
+            self.symlink_duplicate_titles(symlink_dir=symlink_dir, lang=lang)
+        for title in Title.objects.filter(directories__isnull=False):
+            self.create_title_metadata_dir(title=title, symlink_dir=symlink_dir, categories=categories)
         self.add_counts_to_dirnames(symlink_dir=symlink_dir, categories=categories)
         logger.debug("Done")
 
-    def symlink_cover(self, cover_dest_dir: Path, symlink_dir: Path, title: Title) -> None:
+    def symlink_title_dirs(self, subdir: Path, title: Title, symlink_dir: Path, lang: str, title_dir: Path) -> None:
+        """Create title subdir and symlink all copies of this title inside."""
+        subdir.mkdir(exist_ok=True, parents=True)
+        metapath = subdir / "metadata"
+        if not metapath.exists():
+            logger.debug(f"Creating metadata symlink at {metapath} to {title_dir}")
+            metapath.symlink_to(title_dir)
+        logger.debug(f"Symlinking cover in subdir {subdir}")
+        self.symlink_cover(cover_dest_dir=subdir, symlink_dir=symlink_dir, title=title, lang=lang)
+        # loop over copies of this title
+        for directory in title.directories.all():  # type: ignore[attr-defined]
+            # the path of the symlink (not the link target)
+            linkpath = subdir / Path(directory.path).name
+            if linkpath.is_symlink():
+                # The link to this movie already exists.
+                # This can happen when the same titledir name
+                # exists in multiple places, ignore and continue
+                continue
+            target = Path(os.path.relpath(directory.path, linkpath.parent))
+            # create symlink to this directory
+            logger.debug(f"Creating relative symlink at {linkpath} to {target}")
+            linkpath.symlink_to(target)
+            # also symlink cover
+            self.symlink_cover(cover_dest_dir=linkpath.parent, symlink_dir=symlink_dir, title=title, lang=lang)
+
+    def symlink_unidentified_dirs(self, symlink_dir: Path) -> None:
+        """Create a dir with symlinks to all the unidentified titles."""
+        unidentified_dir = symlink_dir / "unidentified"
+        for directory in Directory.objects.filter(title__isnull=True):
+            if not Path(directory.path).exists():
+                continue
+            linkpath = unidentified_dir / Path(directory.path).name
+            target = Path(os.path.relpath(directory.path, linkpath.parent))
+            logger.debug(f"Creating symlink at {linkpath} to unidentified title {directory.path} with target {target}")
+            linkpath.symlink_to(target)
+
+    def symlink_duplicate_titles(self, symlink_dir: Path, lang: str) -> None:
+        """Create a dir with symlinks to all the duplicate titles."""
+        duplicate_dir = symlink_dir / "duplicates"
+        titles_dir = symlink_dir / ".titles"
+        for title in (
+            Title.objects.filter(directories__isnull=False)
+            .annotate(dircount=models.Count("directories"))
+            .filter(dircount__gt=1)
+        ):
+            # /movies/playtime/.titles/tt6264654/
+            title_dir = titles_dir / title.title_id
+            aka = self.get_title_aka(title=title, accept_languages=[lang])
+            aka = aka.replace(os.sep, "_")
+            dirname = f"{aka} ({title.premiered})"
+            subdir = duplicate_dir / dirname
+            self.symlink_title_dirs(subdir=subdir, title=title, symlink_dir=symlink_dir, lang=lang, title_dir=title_dir)
+
+    def create_title_metadata_dir(self, *, title: Title, symlink_dir: Path, categories: list[str]) -> None:
+        """Create the title metadata dir for a title."""
+        # /movies/playtime/.titles/
+        titles_dir = symlink_dir / ".titles"
+        # /movies/playtime/.titles/tt6264654/
+        title_dir = titles_dir / title.title_id
+        title_dir.mkdir(parents=True, exist_ok=True)
+        logger.debug(f"Creating metadata dir for {title} in dir {title_dir}")
+        for category in categories:
+            if category in ["unidentified", "duplicates"]:
+                continue
+            # /movies/playtime/.titles/tt6264654/category
+            category_dir = title_dir / category
+            things = self.get_category_things(title=title, category=category)
+            if not things:
+                if category_dir.exists():
+                    category_dir.rmdir()
+                continue
+            logger.debug(f"Category {category} things {things}")
+            self.clean_category_dir(category_dir=category_dir)
+            for thing in things:
+                septhing = str(thing).replace(os.sep, "_")
+                # /movies/playtime/.titles/tt6264654/category/thing
+                thing_dir = self.get_thingdir(thing=septhing, category=category, category_dir=category_dir, many=False)
+                thing_dir.mkdir(exist_ok=True)
+
+    def symlink_cover(self, cover_dest_dir: Path, symlink_dir: Path, title: Title, lang: str) -> None:
         """Symlink the cover for this title."""
         logger.debug(f"Creating cover symlink for {title} in {cover_dest_dir} with symlink dir {symlink_dir}")
-        coverdir = symlink_dir / ".covers"
-        coverpath = coverdir / f"{title.title_id}.jpg"
+        # /movies/playtime/.titles/
+        titles_dir = symlink_dir / ".titles"
+        # /movies/playtime/.titles/tt6264654/
+        title_dir = titles_dir / title.title_id
+        cover_dir = title_dir / ".covers"
+        cover_dir.mkdir(parents=True, exist_ok=True)
+        # check if this cover already exists in this symlinkdir
+        coverpath = cover_dir / f"{title.title_id}.{lang}.jpg"
         if not coverpath.exists():
-            coversource = self.get_coverpath(title=title)
+            coversource = self.get_coverpath(title=title, lang=lang)
             if not coversource.exists():
+                logger.debug(f"Cover {coversource} doesn't exist")
                 return
             # copy cover from the source
             shutil.copy(coversource, coverpath)
         coverdest = cover_dest_dir / "poster.jpg"
         # make symlink destination relative
         relcoverpath = os.path.relpath(coverpath, coverdest.parent)
-        if not coverdest.exists():
-            logger.debug(f"Creating cover symlink for {title} from {coverdest} to {relcoverpath}")
-            coverdest.symlink_to(relcoverpath)
+        if coverdest.exists():
+            coverdest.unlink()
+        logger.debug(f"Creating cover symlink for {title} from {coverdest} to {relcoverpath}")
+        coverdest.symlink_to(relcoverpath)
 
     def get_category_subdir(
-        self, categorydir: Path, category: str, thing: str, title: Title, accept_languages: list[str]
+        self, category_dir: Path, category: str, thing: str, title: Title, accept_languages: list[str]
     ) -> Path:
         """Return the subdir to use for this title in this category."""
         subdir: Path
+        thing = str(thing).replace(os.sep, "_")
         aka = self.get_title_aka(title=title, accept_languages=accept_languages)
         aka = aka.replace(os.sep, "_")
         dirname = f"{aka} ({title.premiered})"
-        if category in ["actors", "directors", "producers", "composers", "writers"]:
+        thing_dir = self.get_thingdir(thing=thing, category=category, category_dir=category_dir, many=True)
+        # a few categories have special naming of the title dir
+        if category == "rating":
+            subdir = thing_dir / f"{dirname} ({title.rating.votes} votes)"  # type: ignore[attr-defined]
+        elif category in ["top_ranking", "bottom_ranking"]:
+            subdir = (
+                category_dir / f"{int(thing):04d}. {dirname} ({title.rating.rating} with {title.rating.votes} votes)"  # type: ignore[attr-defined]
+            )
+        else:
+            subdir = thing_dir / dirname
+        return subdir
+
+    def get_thingdir(self, *, thing: str, category: str, category_dir: Path, many: bool = True) -> Path:
+        """Get the dir for this thing in this category."""
+        if category in ["actors", "directors", "producers", "composers", "writers"] and many:
             # make a level with the first letter
-            subdir = categorydir / str(thing)[0] / str(thing) / dirname
+            subdir = category_dir / str(thing)[0] / str(thing)
         elif category == "runtime":
             step = 30
             runtime = int(thing) * step
-            subdir = categorydir / f"{runtime}-{runtime + step}" / dirname
-        elif category == "rating":
-            subdir = categorydir / str(thing) / f"{dirname} ({title.rating.votes} votes)"  # type: ignore[attr-defined]
-        elif category in ["top_ranking", "bottom_ranking"]:
-            subdir = (
-                categorydir / f"{thing:04}. {dirname} ({title.rating.rating} with {title.rating.votes} votes)"  # type: ignore[attr-defined]
-            )
+            subdir = category_dir / f"{runtime}-{runtime + step}"
         else:
-            subdir = categorydir / str(thing) / dirname
+            subdir = category_dir / str(thing)
         return subdir
 
-    def get_coverpath(self, title: Title) -> Path:
+    def get_coverpath(self, title: Title, lang: str = "en") -> Path:
         """Get the cover path for this title. They are always jpg."""
-        return self.cover_directory / f"{title.title_id}.jpg"
+        return self.cover_directory / f"{title.title_id}.{lang}.jpg"
 
     def add_counts_to_dirnames(self, *, symlink_dir: Path, categories: list[str]) -> None:
         """Add counts to directory names on all levels."""
         for category in categories:
-            if category in ["top_ranking", "bottom_ranking"]:
+            if category in ["top_ranking", "bottom_ranking", "unidentified"]:
                 continue
-            unit = "people" if category in ["actors", "directors", "producers", "composers", "writers"] else "titles"
-            categorydir = symlink_dir / category
-            self.rename_dirs_with_counts(directories=list(categorydir.iterdir()), unit=unit)
+            if category in ["actors", "directors", "producers", "composers", "writers"]:
+                unit = "people"
+            elif category == "duplicates":
+                unit = "copies"
+            else:
+                unit = "titles"
+            category_dir = symlink_dir / category
+            self.rename_dirs_with_counts(directories=list(category_dir.iterdir()), unit=unit)
             if category in ["actors", "directors", "producers", "composers", "writers"]:
                 # go one level deeper for the people categories
-                for thingdir in categorydir.iterdir():
+                for thingdir in category_dir.iterdir():
                     self.rename_dirs_with_counts(directories=list(thingdir.iterdir()), unit="titles")
 
     def rename_dirs_with_counts(self, directories: list[Path], unit: str) -> None:
         """Rename the dirs with the number of things in them."""
         for directory in directories:
-            count = len([d for d in directory.iterdir() if d.is_dir()])
+            count = len([d for d in directory.iterdir() if d.is_dir() and d.name != "metadata"])
             countdir = directory.parent / f"{directory.name} ({count} {unit})"
             logger.debug(f"Renaming {directory} to {countdir}")
             directory.rename(countdir)
@@ -563,12 +675,43 @@ class Playtime:
 
     def get_title_aka(self, title: Title, accept_languages: list[str]) -> str:
         """Return the best aka for a title considering accept_languages."""
+        if not title.cgngdata.exists():  # type: ignore[attr-defined]
+            return title.primary_title
+
+        # language code of the cgngdata is not important here, just get any
+        cgngdata = title.cgngdata.first()  # type: ignore[attr-defined]
+
         # use original title if cgngdata["language_codes"] containes one of the acceptable_languages
-        if title.cgngdata and "language_codes" in title.cgngdata.data and title.cgngdata.data["language_codes"]:  # type: ignore[attr-defined]
-            for lang in accept_languages:
-                if lang in title.cgngdata.data["language_codes"]:  # type: ignore[attr-defined]
-                    return title.original_title
+        if cgngdata.data["language_codes"] and cgngdata.data["language_codes"][0] in accept_languages:
+            # the most spoken language in this title is acceptable,
+            # use the original title
+            return title.original_title
+        # use the primary title
         return title.primary_title
+
+    def get_title_language(self, title: Title, accept_languages: list[str]) -> str:
+        """Return the best language code to use for this title."""
+        if not title.cgngdata.exists():  # type: ignore[attr-defined]
+            return "en"
+
+        # language code of the cgngdata is not important, just get any
+        cgngdata = title.cgngdata.first()  # type: ignore[attr-defined]
+        if (
+            "language_codes" in cgngdata.data
+            and cgngdata.data["language_codes"]
+            and cgngdata.data["language_codes"][0] in accept_languages
+        ):
+            return str(cgngdata.data["language_codes"][0])
+        # Go with 'en'
+        return "en"
+
+    def file_hash(self, file_path: Path) -> str:
+        """Compute the sha256 hash of a file."""
+        hash_func = hashlib.new("sha256")
+        with file_path.open("rb") as f:
+            while chunk := f.read(1024):
+                hash_func.update(chunk)
+        return hash_func.hexdigest()
 
 
 ############## BOILERPLATE #########################################################################
@@ -648,11 +791,11 @@ def get_parser() -> argparse.ArgumentParser:
         help="Attempt (re)identification even if the directory is already known in the local database.",
     )
     identify_parser.add_argument(
-        "-t",
-        "--ignore-textfiles",
-        action="store_true",
-        default=False,
-        help="Ignore IMDB IDs in textfiles in each directory when identifying.",
+        "-l",
+        "--languages",
+        type=parse_comma_str_to_list,
+        default=[],
+        help="Comma-separated list of acceptable non-english languages.",
     )
     identify_parser.add_argument(
         "-p",
@@ -660,6 +803,13 @@ def get_parser() -> argparse.ArgumentParser:
         action="store_true",
         default=False,
         help="Persist directory identification by writing the IMDB URL to imdb.txt.",
+    )
+    identify_parser.add_argument(
+        "-t",
+        "--ignore-textfiles",
+        action="store_true",
+        default=False,
+        help="Ignore IMDB IDs in textfiles in each directory when identifying.",
     )
 
     ###########################################
@@ -682,7 +832,7 @@ def get_parser() -> argparse.ArgumentParser:
         help="Required. The directory in which to create the title category symlinks.",
     )
     symlink_parser.add_argument(
-        "-C",
+        "-c",
         "--categories",
         nargs="+",
         default=[
@@ -700,6 +850,8 @@ def get_parser() -> argparse.ArgumentParser:
             "bottom_ranking",
             "language",
             "languages",
+            "unidentified",
+            "duplicates",
         ],
         help="Movie categories to enable for 'playtime symlink'.",
     )
@@ -774,13 +926,6 @@ def get_parser() -> argparse.ArgumentParser:
             "Delete existing TSV files and download new ones from IMDB if "
             "the existing files are older than this number of seconds."
         ),
-    )
-    import_parser.add_argument(
-        "-l",
-        "--languages",
-        type=parse_comma_str_to_list,
-        default=[],
-        help="Comma-separated list of acceptable non-english languages.",
     )
 
     ###########################################
