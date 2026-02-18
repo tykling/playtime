@@ -282,7 +282,7 @@ class Playtime:
         if not force:
             # not forcing identification, try local database first
             try:
-                dbdir = Directory.objects.get(path=str(directory))
+                dbdir = Directory.objects.get(path=str(directory), title__isnull=False)
                 logger.debug(f"{directory} - known in local database, returning title {dbdir.title}")
             except Directory.DoesNotExist:
                 logger.debug(f"{directory} - not known in local database, identifying...")
