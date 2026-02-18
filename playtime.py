@@ -495,9 +495,11 @@ class Playtime:
         """Create title subdir and symlink all copies of this title inside."""
         subdir.mkdir(exist_ok=True, parents=True)
         metapath = subdir / "metadata"
-        if not metapath.exists():
-            logger.debug(f"Creating metadata symlink at {metapath} to {title_dir}")
-            metapath.symlink_to(title_dir)
+        if metapath.exists():
+            metapath.unlink()
+        target = Path(os.path.relpath(title_dir, subdir))
+        logger.debug(f"Creating metadata symlink at {metapath} to {title_dir} relative {target}")
+        metapath.symlink_to(target)
         logger.debug(f"Symlinking cover in subdir {subdir}")
         self.symlink_cover(cover_dest_dir=subdir, symlink_dir=symlink_dir, title=title, lang=lang)
         # loop over copies of this title
